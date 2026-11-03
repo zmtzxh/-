@@ -1,0 +1,1085 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#111111">
+<title>Physics Home Screen</title>
+
+<style>
+* {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #111;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    touch-action: none;
+    overscroll-behavior: none;
+}
+
+#scene {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    height: 100dvh;
+    overflow: hidden;
+    touch-action: none;
+}
+
+#background {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    z-index: 0;
+    pointer-events: none;
+}
+
+#world {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+}
+
+.app {
+    position: absolute;
+    width: var(--icon-size, 76px);
+    height: var(--icon-size, 76px);
+    margin: calc(var(--icon-size, 76px) / -2) 0 0 calc(var(--icon-size, 76px) / -2);
+    pointer-events: auto;
+    touch-action: none;
+    will-change: transform;
+    cursor: grab;
+}
+
+.icon {
+    width: 100%;
+    height: 100%;
+    border-radius: 23%;
+    overflow: hidden;
+    background: #171719;
+    box-shadow:
+        0 3px 9px rgba(0,0,0,.35),
+        inset 0 1px 1px rgba(255,255,255,.13);
+}
+
+.icon svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+    pointer-events: none;
+}
+
+.label {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 5px;
+    color: white;
+    font-size: 14px;
+    font-weight: 600;
+    white-space: nowrap;
+    text-shadow: 0 2px 5px rgba(0,0,0,.9);
+    pointer-events: none;
+}
+
+/* Controls */
+
+#toolbar {
+    position: absolute;
+    z-index: 10;
+    top: max(12px, env(safe-area-inset-top));
+    left: 12px;
+    right: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    pointer-events: none;
+    opacity: 1;
+    transform: translateY(0);
+    transition: opacity .3s ease, transform .3s ease;
+}
+
+#toolbar.hidden {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-15px);
+}
+
+.tool {
+    pointer-events: auto;
+    color: white;
+    background: rgba(20,20,20,.55);
+    border: 1px solid rgba(255,255,255,.22);
+    border-radius: 30px;
+    padding: 10px 14px;
+    font-size: 12px;
+    font-weight: 650;
+    backdrop-filter: blur(15px);
+    -webkit-backdrop-filter: blur(15px);
+    cursor: pointer;
+}
+
+.tool:active {
+    background: rgba(255,255,255,.3);
+}
+
+#fileInput {
+    display: none;
+}
+
+#message {
+    position: absolute;
+    z-index: 15;
+    bottom: max(25px, env(safe-area-inset-bottom));
+    left: 10%;
+    right: 10%;
+    text-align: center;
+    color: white;
+    font-size: 13px;
+    font-weight: 600;
+    text-shadow: 0 2px 5px black;
+    opacity: 0;
+    transition: opacity .25s;
+    pointer-events: none;
+}
+</style>
+</head>
+
+<body>
+
+<div id="scene">
+
+    <img id="background" alt="Wallpaper">
+
+    <div id="world"></div>
+
+    <div id="toolbar">
+
+        <label class="tool" for="fileInput">
+            Change wallpaper
+        </label>
+
+        <input id="fileInput" type="file" accept="image/*">
+
+        <button class="tool" id="motionButton">
+            Enable motion
+        </button>
+
+        <button class="tool" id="resetButton">
+            Reset
+        </button>
+
+    </div>
+
+    <div id="message"></div>
+
+</div>
+
+<script>
+
+/* =====================================
+   ELEMENTS
+===================================== */
+
+const scene = document.getElementById("scene");
+const world = document.getElementById("world");
+const background = document.getElementById("background");
+const toolbar = document.getElementById("toolbar");
+
+const motionButton = document.getElementById("motionButton");
+const resetButton = document.getElementById("resetButton");
+const fileInput = document.getElementById("fileInput");
+const message = document.getElementById("message");
+
+const clamp = (v,min,max) =>
+    Math.max(min,Math.min(max,v));
+
+
+/* =====================================
+   SETTINGS
+===================================== */
+
+const CONFIG = {
+    gravity: 2400,
+    friction: 0.985,
+    bounce: 0.68,
+    maxSpeed: 3000,
+    collisionBounce: 0.72
+};
+
+let W = 0;
+let H = 0;
+let SIZE = 76;
+
+let active = false;
+let permissionGranted = false;
+let dragging = null;
+
+let gravity = {x:0,y:0};
+let targetGravity = {x:0,y:0};
+
+let lastTime = 0;
+let lastShake = 0;
+let messageTimer = null;
+let backgroundURL = null;
+
+let controlsVisible = true;
+
+
+/* =====================================
+   ICON DESIGNS
+===================================== */
+
+const ICONS = [
+
+{
+    name:"Sileo",
+    x:.28,
+    y:.31,
+    svg:`
+    <rect width="64" height="64" fill="#151517"/>
+    <path d="M32 9 52 20v24L32 56 12 44V20z" fill="#24cfc1"/>
+    <path d="M12 20 32 32v24L12 44z" fill="#16aaa8"/>
+    <path d="M20 30 28 35v8l-8-5z" fill="#123c41"/>
+    <path d="m37 38 9-5v4l-9 5zm0 7 9-5v4l-9 5" fill="#123c41"/>
+    `
+},
+
+{
+    name:"ZMTZXH",
+    x:.50,
+    y:.31,
+    svg:`
+    <rect width="64" height="64" fill="#171719"/>
+    <path d="M17 17h30v8L28 40h19v8H17v-8l19-15H17z" fill="#f4f4f5"/>
+    `
+},
+
+{
+    name:"LocalDevVPN",
+    x:.72,
+    y:.31,
+    svg:`
+    <rect width="64" height="64" fill="#171719"/>
+    <defs>
+      <linearGradient id="vpn" x2="0" y2="1">
+        <stop stop-color="#729c62"/>
+        <stop offset="1" stop-color="#153b77"/>
+      </linearGradient>
+    </defs>
+    <rect x="9" y="9" width="46" height="46" rx="7" fill="url(#vpn)" stroke="#9ca99b"/>
+    <path d="M25 16h5v12h-5zm10 0h5v12h-5z" fill="#101725"/>
+    <path d="M20 27h24v8c0 7-5 11-10 12v4h-4v-4c-6-1-10-5-10-12z" fill="#101725"/>
+    `
+},
+
+{
+    name:"Telegram",
+    x:.28,
+    y:.53,
+    svg:`
+    <rect width="64" height="64" fill="#171719"/>
+    <circle cx="32" cy="32" r="25" fill="#1689ee"/>
+    <path d="M12 30 50 16 43 49 31 39 24 45 23 35z" fill="white"/>
+    <path d="m23 35 20-14-12 18" fill="#b7ddff"/>
+    `
+},
+
+{
+    name:"Firefox",
+    x:.50,
+    y:.53,
+    svg:`
+    <rect width="64" height="64" fill="#171719"/>
+    <defs>
+      <linearGradient id="fire1" x1="0" y1="0" x2="1" y2="1">
+        <stop stop-color="#ffe64a"/>
+        <stop offset=".5" stop-color="#ff7925"/>
+        <stop offset="1" stop-color="#ec267e"/>
+      </linearGradient>
+      <radialGradient id="fire2">
+        <stop stop-color="#a65cf5"/>
+        <stop offset="1" stop-color="#4526a3"/>
+      </radialGradient>
+    </defs>
+    <circle cx="32" cy="36" r="21" fill="url(#fire1)"/>
+    <circle cx="34" cy="36" r="14" fill="url(#fire2)"/>
+    <path d="M40 9c8 4 10 11 8 19-4-4-8-5-13-4 5-4 7-9 5-15z" fill="#ffe04a"/>
+    <path d="M17 20c-8 9-7 23 2 31-3-11 1-19 10-24z" fill="#ff7b28"/>
+    `
+},
+
+{
+    name:"",
+    x:.28,
+    y:.77,
+    svg:`
+    <rect width="64" height="64" fill="#080a10"/>
+    <rect x="7" y="7" width="50" height="50" rx="12" fill="#071a38" stroke="#167cff" stroke-width="4"/>
+    <g fill="none" stroke="#2688ff" stroke-width=".8">
+      <circle cx="32" cy="32" r="8"/>
+      <circle cx="32" cy="32" r="15"/>
+      <circle cx="32" cy="32" r="21"/>
+      <path d="M11 32h42M32 11v42M17 17l30 30M47 17 17 47"/>
+      <rect x="17" y="17" width="30" height="30"/>
+    </g>
+    `
+},
+
+{
+    name:"",
+    x:.50,
+    y:.77,
+    svg:`
+    <rect width="64" height="64" fill="#f13b39"/>
+    <path d="M32 8 56 32 32 56 8 32z" fill="#fff3dc"/>
+    <path d="M32 20 44 32 32 44 20 32z" fill="#f13b39"/>
+    `
+},
+
+{
+    name:"",
+    x:.72,
+    y:.77,
+    svg:`
+    <defs>
+      <linearGradient id="zip" x2="0" y2="1">
+        <stop stop-color="#fff"/>
+        <stop offset="1" stop-color="#d9dce4"/>
+      </linearGradient>
+      <linearGradient id="zipblue" x2="0" y2="1">
+        <stop stop-color="#45c5ff"/>
+        <stop offset="1" stop-color="#2681ed"/>
+      </linearGradient>
+    </defs>
+    <rect width="64" height="64" fill="url(#zip)"/>
+    <rect x="12" y="13" width="40" height="38" rx="6" fill="url(#zipblue)"/>
+    <path d="M32 13v24" stroke="#fff" stroke-width="4" stroke-dasharray="3 2"/>
+    <path d="M29 36h6v8h-6z" fill="#fff"/>
+    `
+}
+
+];
+
+
+/* =====================================
+   CREATE APPS
+===================================== */
+
+const bodies = ICONS.map(data => {
+
+    const el = document.createElement("div");
+
+    el.className = "app";
+
+    el.innerHTML = `
+        <div class="icon">
+            <svg viewBox="0 0 64 64">
+                ${data.svg}
+            </svg>
+        </div>
+
+        ${data.name ? `<div class="label">${data.name}</div>` : ""}
+    `;
+
+    world.appendChild(el);
+
+    return {
+        ...data,
+        el,
+        icon:el.querySelector(".icon"),
+        x:0,
+        y:0,
+        homeX:0,
+        homeY:0,
+        vx:0,
+        vy:0,
+        angle:0,
+        radius:SIZE/2
+    };
+
+});
+
+
+/* =====================================
+   RESPONSIVE LAYOUT
+===================================== */
+
+function resize() {
+
+    const oldW = W;
+    const oldH = H;
+
+    W = scene.clientWidth;
+    H = scene.clientHeight;
+
+    SIZE = clamp(W*.18,65,82);
+
+    scene.style.setProperty("--icon-size",SIZE+"px");
+
+    bodies.forEach(b => {
+
+        b.radius = SIZE/2;
+
+        if(oldW && oldH) {
+
+            b.x *= W/oldW;
+            b.y *= H/oldH;
+
+            b.homeX *= W/oldW;
+            b.homeY *= H/oldH;
+
+        } else {
+
+            b.x = b.homeX = b.x*W;
+            b.y = b.homeY = b.y*H;
+
+        }
+
+    });
+
+}
+
+function reset() {
+
+    dragging = null;
+
+    bodies.forEach(b => {
+
+        b.x = b.homeX;
+        b.y = b.homeY;
+
+        b.vx = 0;
+        b.vy = 0;
+        b.angle = 0;
+
+    });
+
+    gravity = {x:0,y:0};
+    targetGravity = {x:0,y:0};
+
+    showMessage("Icons reset");
+
+}
+
+
+/* =====================================
+   BACKGROUND CONTROLS TOGGLE
+===================================== */
+
+function toggleControls() {
+
+    controlsVisible = !controlsVisible;
+
+    toolbar.classList.toggle(
+        "hidden",
+        !controlsVisible
+    );
+
+}
+
+scene.addEventListener("click",e => {
+
+    // App clicks never toggle the toolbar
+    if(e.target.closest(".app")) return;
+
+    // Toolbar clicks never toggle itself
+    if(e.target.closest("#toolbar")) return;
+
+    // Only empty background toggles
+    toggleControls();
+
+});
+
+
+/* =====================================
+   WALLPAPER UPLOAD
+===================================== */
+
+fileInput.addEventListener("change",e => {
+
+    const file = e.target.files?.[0];
+
+    if(!file) return;
+
+    if(!file.type.startsWith("image/")) {
+
+        showMessage("Please select an image");
+        return;
+
+    }
+
+    if(backgroundURL) {
+        URL.revokeObjectURL(backgroundURL);
+    }
+
+    backgroundURL = URL.createObjectURL(file);
+
+    background.src = backgroundURL;
+
+    showMessage("Wallpaper changed!");
+
+    fileInput.value = "";
+
+});
+
+
+/* =====================================
+   PHYSICS ENGINE
+===================================== */
+
+function physics(dt) {
+
+    const G = CONFIG.gravity;
+
+    const friction = Math.pow(CONFIG.friction,dt*60);
+
+    const maxSpeed = CONFIG.maxSpeed;
+
+    for(const b of bodies) {
+
+        if(dragging && dragging.b === b) continue;
+
+        b.vx += gravity.x*G*dt;
+        b.vy += gravity.y*G*dt;
+
+        b.vx *= friction;
+        b.vy *= friction;
+
+        b.vx = clamp(b.vx,-maxSpeed,maxSpeed);
+        b.vy = clamp(b.vy,-maxSpeed,maxSpeed);
+
+        b.x += b.vx*dt;
+        b.y += b.vy*dt;
+
+        b.angle += b.vx*dt/b.radius*.4;
+
+        const r = b.radius;
+
+        if(b.x < r) {
+            b.x = r;
+            b.vx = Math.abs(b.vx)*CONFIG.bounce;
+        }
+
+        if(b.x > W-r) {
+            b.x = W-r;
+            b.vx = -Math.abs(b.vx)*CONFIG.bounce;
+        }
+
+        if(b.y < r) {
+            b.y = r;
+            b.vy = Math.abs(b.vy)*CONFIG.bounce;
+        }
+
+        if(b.y > H-r) {
+            b.y = H-r;
+            b.vy = -Math.abs(b.vy)*CONFIG.bounce;
+        }
+
+    }
+
+    // App collisions
+
+    for(let i=0;i<bodies.length;i++) {
+
+        for(let j=i+1;j<bodies.length;j++) {
+
+            const a = bodies[i];
+            const b = bodies[j];
+
+            const dx = b.x-a.x;
+            const dy = b.y-a.y;
+
+            const distance = Math.hypot(dx,dy);
+            const minDistance = a.radius+b.radius;
+
+            if(distance >= minDistance || distance < .001) continue;
+
+            const nx = dx/distance;
+            const ny = dy/distance;
+
+            const invA = dragging?.b === a ? 0 : 1;
+            const invB = dragging?.b === b ? 0 : 1;
+
+            const total = invA+invB;
+
+            if(total === 0) continue;
+
+            const overlap = minDistance-distance;
+
+            a.x -= nx*overlap*invA/total;
+            a.y -= ny*overlap*invA/total;
+
+            b.x += nx*overlap*invB/total;
+            b.y += ny*overlap*invB/total;
+
+            const relative =
+                (b.vx-a.vx)*nx+
+                (b.vy-a.vy)*ny;
+
+            if(relative < 0) {
+
+                const impulse =
+                    -(1+CONFIG.collisionBounce)*relative/total;
+
+                a.vx -= impulse*nx*invA;
+                a.vy -= impulse*ny*invA;
+
+                b.vx += impulse*nx*invB;
+                b.vy += impulse*ny*invB;
+
+            }
+
+        }
+
+    }
+
+}
+
+
+/* =====================================
+   ANIMATION LOOP
+===================================== */
+
+function loop(time) {
+
+    const dt = Math.min(
+        (time-lastTime)/1000 || .016,
+        .033
+    );
+
+    lastTime = time;
+
+    gravity.x += (targetGravity.x-gravity.x)*.18;
+    gravity.y += (targetGravity.y-gravity.y)*.18;
+
+    if(active) {
+
+        for(let i=0;i<3;i++) {
+            physics(dt/3);
+        }
+
+    }
+
+    bodies.forEach(b => {
+
+        b.el.style.transform =
+            `translate3d(${b.x}px,${b.y}px,0)`;
+
+        b.icon.style.transform =
+            `rotate(${b.angle}rad)`;
+
+    });
+
+    requestAnimationFrame(loop);
+
+}
+
+
+/* =====================================
+   DRAGGING AND THROWING
+===================================== */
+
+function pointerPosition(e) {
+
+    const r = scene.getBoundingClientRect();
+
+    return {
+        x:e.clientX-r.left,
+        y:e.clientY-r.top
+    };
+
+}
+
+scene.addEventListener("pointerdown",e => {
+
+    if(e.target.closest("#toolbar")) return;
+
+    const p = pointerPosition(e);
+
+    let best = null;
+    let closest = Infinity;
+
+    for(const b of bodies) {
+
+        const d = Math.hypot(b.x-p.x,b.y-p.y);
+
+        if(d < b.radius*1.5 && d < closest) {
+            best = b;
+            closest = d;
+        }
+
+    }
+
+    if(!best) return;
+
+    dragging = {
+        b:best,
+        id:e.pointerId,
+        dx:best.x-p.x,
+        dy:best.y-p.y,
+        previousX:best.x,
+        previousY:best.y,
+        time:performance.now()
+    };
+
+    best.vx = 0;
+    best.vy = 0;
+
+    active = true;
+
+    scene.setPointerCapture(e.pointerId);
+
+});
+
+scene.addEventListener("pointermove",e => {
+
+    if(!dragging || dragging.id !== e.pointerId) return;
+
+    const p = pointerPosition(e);
+    const b = dragging.b;
+
+    const now = performance.now();
+
+    const dt = Math.max(
+        .008,
+        (now-dragging.time)/1000
+    );
+
+    const nx = clamp(
+        p.x+dragging.dx,
+        b.radius,
+        W-b.radius
+    );
+
+    const ny = clamp(
+        p.y+dragging.dy,
+        b.radius,
+        H-b.radius
+    );
+
+    b.vx = (nx-dragging.previousX)/dt;
+    b.vy = (ny-dragging.previousY)/dt;
+
+    b.x = nx;
+    b.y = ny;
+
+    dragging.previousX = nx;
+    dragging.previousY = ny;
+    dragging.time = now;
+
+});
+
+function release(e) {
+
+    if(!dragging || dragging.id !== e.pointerId) return;
+
+    const b = dragging.b;
+
+    b.vx = clamp(b.vx,-CONFIG.maxSpeed,CONFIG.maxSpeed);
+    b.vy = clamp(b.vy,-CONFIG.maxSpeed,CONFIG.maxSpeed);
+
+    dragging = null;
+
+}
+
+scene.addEventListener("pointerup",release);
+scene.addEventListener("pointercancel",release);
+
+
+/* =====================================
+   IOS MOTION SENSORS
+===================================== */
+
+let baseline = null;
+
+function onOrientation(e) {
+
+    if(e.beta === null || e.gamma === null) return;
+
+    const beta = e.beta;
+    const gamma = e.gamma;
+
+    if(!baseline) {
+
+        baseline = {
+            beta,
+            gamma
+        };
+
+        return;
+
+    }
+
+    let dx = gamma-baseline.gamma;
+    let dy = beta-baseline.beta;
+
+    let x = Math.sin(dx*Math.PI/180);
+    let y = Math.sin(dy*Math.PI/180);
+
+    const angle =
+        screen.orientation?.angle ??
+        window.orientation ??
+        0;
+
+    if(angle === 90) {
+        [x,y] = [y,-x];
+    } else if(angle === 270 || angle === -90) {
+        [x,y] = [-y,x];
+    } else if(angle === 180) {
+        x = -x;
+        y = -y;
+    }
+
+    targetGravity.x = clamp(x*1.8,-1,1);
+    targetGravity.y = clamp(y*1.8,-1,1);
+
+}
+
+function onDeviceMotion(e) {
+
+    if(!active) return;
+
+    const a = e.acceleration;
+
+    if(!a || a.x === null) return;
+
+    const now = performance.now();
+
+    const force = Math.hypot(
+        a.x,
+        a.y,
+        a.z || 0
+    );
+
+    if(force > 16 && now-lastShake > 600) {
+
+        lastShake = now;
+
+        bodies.forEach(b => {
+
+            b.vx += (Math.random()-.5)*1200;
+            b.vy += (Math.random()-.5)*1200;
+
+        });
+
+        showMessage("Shake detected!");
+
+    }
+
+}
+
+async function enableMotion() {
+
+    if(permissionGranted && active) {
+
+        active = false;
+        permissionGranted = false;
+        baseline = null;
+
+        window.removeEventListener(
+            "deviceorientation",
+            onOrientation
+        );
+
+        window.removeEventListener(
+            "devicemotion",
+            onDeviceMotion
+        );
+
+        targetGravity = {x:0,y:0};
+
+        motionButton.textContent = "Enable motion";
+
+        showMessage("Motion disabled");
+
+        return;
+
+    }
+
+    try {
+
+        let granted = true;
+
+        if(
+            typeof DeviceOrientationEvent !== "undefined" &&
+            typeof DeviceOrientationEvent.requestPermission === "function"
+        ) {
+
+            granted =
+                await DeviceOrientationEvent.requestPermission()
+                === "granted";
+
+        }
+
+        if(!granted) {
+            showMessage("Motion permission denied");
+            return;
+        }
+
+        window.addEventListener(
+            "deviceorientation",
+            onOrientation
+        );
+
+        try {
+
+            if(
+                typeof DeviceMotionEvent !== "undefined" &&
+                typeof DeviceMotionEvent.requestPermission === "function"
+            ) {
+
+                const result =
+                    await DeviceMotionEvent.requestPermission();
+
+                if(result === "granted") {
+
+                    window.addEventListener(
+                        "devicemotion",
+                        onDeviceMotion
+                    );
+
+                }
+
+            } else {
+
+                window.addEventListener(
+                    "devicemotion",
+                    onDeviceMotion
+                );
+
+            }
+
+        } catch(err) {
+
+            console.log("Acceleration unavailable",err);
+
+        }
+
+        active = true;
+        permissionGranted = true;
+
+        motionButton.textContent = "Disable motion";
+
+        showMessage("Tilt your iPhone to move icons!");
+
+    } catch(error) {
+
+        console.error(error);
+
+        showMessage("Open this page in Safari over HTTPS");
+
+    }
+
+}
+
+
+/* =====================================
+   MESSAGES
+===================================== */
+
+function showMessage(text) {
+
+    message.textContent = text;
+    message.style.opacity = 1;
+
+    clearTimeout(messageTimer);
+
+    messageTimer = setTimeout(() => {
+        message.style.opacity = 0;
+    },2500);
+
+}
+
+
+/* =====================================
+   BUTTON EVENTS
+===================================== */
+
+motionButton.addEventListener(
+    "click",
+    enableMotion
+);
+
+resetButton.addEventListener(
+    "click",
+    reset
+);
+
+
+/* =====================================
+   IOS ANTI-ZOOM
+===================================== */
+
+// Prevent Safari gesture zoom
+
+["gesturestart","gesturechange","gestureend"].forEach(event => {
+
+    document.addEventListener(event,e => {
+        e.preventDefault();
+    },{passive:false});
+
+});
+
+// Prevent double-tap zoom
+
+document.addEventListener("dblclick",e => {
+    e.preventDefault();
+},{passive:false});
+
+// Prevent multi-touch pinch gestures
+
+document.addEventListener("touchmove",e => {
+
+    if(e.touches.length > 1) {
+        e.preventDefault();
+    }
+
+},{passive:false});
+
+// Prevent Ctrl + wheel zoom on desktop
+
+document.addEventListener("wheel",e => {
+
+    if(e.ctrlKey) {
+        e.preventDefault();
+    }
+
+},{passive:false});
+
+
+/* =====================================
+   INITIALIZATION
+===================================== */
+
+resize();
+
+window.addEventListener("resize",resize);
+
+window.addEventListener("orientationchange",() => {
+    setTimeout(resize,250);
+});
+
+requestAnimationFrame(loop);
+
+showMessage("Tap the wallpaper to hide controls!");
+
+</script>
+
+</body>
+</html>
